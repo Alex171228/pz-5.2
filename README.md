@@ -50,7 +50,7 @@
 | Поле | Тип | Описание |
 |------|-----|----------|
 | `error` | string | Текст ошибки (без секретов) |
-| `component` | string | Компонент: `handler`, `auth_middleware`, `auth_client_grpc`, `grpc_server` |
+| `component` | string | Компонент: `handler`, `auth_middleware`, `auth_client_http`, `auth_client_grpc` |
 | `task_id` | string | ID задачи (при CRUD-операциях) |
 | `subject` | string | Субъект из токена (при успешной верификации) |
 | `has_auth` | bool | Факт наличия токена (без самого значения) |
@@ -77,7 +77,7 @@ curl -i -X POST http://<SERVER_IP>:8082/v1/tasks \
   -d '{"title":"Logs","description":"Implement zap","due_date":"2026-01-12"}'
 ```
 
-201 Created. В логах Tasks видно цепочку gRPC verify → token verified → task created → request completed. В логах Auth — verify request received → token verified. 
+201 Created. В логах Tasks видно цепочку: calling auth HTTP verify → auth HTTP verify: success → token verified → task created → request completed. В логах Auth — token verified → request completed (200).
 
 <img width="1898" height="126" alt="image" src="https://github.com/user-attachments/assets/4c229940-2ec2-48ad-99dc-197300437c88" /> 
 
@@ -90,7 +90,7 @@ curl -i http://<SERVER_IP>:8082/v1/tasks \
   -H "X-Request-ID: pz19-003"
 ```
 
-401 Unauthorized. В логах Tasks уровень `warn` — `auth gRPC verify: unauthorized`, `invalid token`. Токен не попадает в логи (только `has_auth: true`). 
+401 Unauthorized. В логах Tasks уровень `warn` — `auth HTTP verify: unauthorized`, `invalid token`. Токен не попадает в логи (только `has_auth: true`). В логах Auth — `token verification failed` (уровень `warn`).
 
 
 <img width="1904" height="300" alt="image" src="https://github.com/user-attachments/assets/3de613f4-9731-4856-8521-5ff4e3939d73" /> 
@@ -103,21 +103,21 @@ curl -i http://<SERVER_IP>:8082/v1/tasks \
 ```bash
 curl -s -X POST http://<SERVER_IP>:8081/v1/auth/login \
   -H "Content-Type: application/json" \
-  -H "X-Request-ID: pz19-001" \
+  -H "X-Request-ID: pz19-010" \
   -d '{"username":"student","password":"student"}'
 ```
 
-Шаг 2 — создать задачу (тот же request-id видно в обоих сервисах):
+Шаг 2 — создать задачу (request-id видно в обоих сервисах):
 
 ```bash
 curl -i -X POST http://<SERVER_IP>:8082/v1/tasks \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer demo-token" \
-  -H "X-Request-ID: pz19-002" \
+  -H "X-Request-ID: pz19-011" \
   -d '{"title":"Cross-service","description":"Test correlation","due_date":"2026-01-12"}'
 ```
 
-По `request_id: "pz19-002"` можно найти связанные события в логах обоих сервисов (Auth и Tasks).
+По `request_id: "pz19-011"` можно найти связанные события в логах обоих сервисов: Auth (`service: auth`, verify) и Tasks (`service: tasks`, task created).
 
 <img width="1899" height="407" alt="image" src="https://github.com/user-attachments/assets/02aebe24-4ba9-4a27-bdba-03332d343e5c" /> 
 
@@ -144,12 +144,10 @@ export AUTH_GRPC_PORT=50051
 go run ./services/auth/cmd/auth
 ```
 
-**Терминал 2 — Tasks Service (gRPC режим):**
+**Терминал 2 — Tasks Service:**
 
 ```bash
 export TASKS_PORT=8082
-export AUTH_GRPC_ADDR=localhost:50051
-export AUTH_MODE=grpc
 go run ./services/tasks/cmd/tasks
 ```
 
