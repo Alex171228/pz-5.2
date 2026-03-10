@@ -1,29 +1,16 @@
 version: "3.8"
 
 services:
-  tasks:
-    build:
-      context: ../..
-      dockerfile: services/tasks/Dockerfile
-    ports:
-      - "8082:8082"
-    environment:
-      - TASKS_PORT=8082
-      - AUTH_MODE=http
-      - AUTH_BASE_URL=http://host.docker.internal:8081
-    networks:
-      - monitoring
-
   prometheus:
     image: prom/prometheus:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
     networks:
       - monitoring
-    depends_on:
-      - tasks
 
   grafana:
     image: grafana/grafana:latest
