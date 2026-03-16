@@ -21,6 +21,6 @@ EXPOSE 8082
 
 ENV TASKS_PORT=8082
 ENV AUTH_MODE=http
-ENV AUTH_BASE_URL=http://localhost:8081
+ENV AUTH_BASE_URL=http://host.docker.internal:8081
 
 CMD ["./tasks"]

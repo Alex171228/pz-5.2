@@ -29,6 +29,7 @@ func NewHandler(taskService *service.TaskService, authVerifier authclient.AuthVe
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tasks", h.authMiddleware(h.handleCreate))
 	mux.HandleFunc("GET /v1/tasks", h.authMiddleware(h.handleGetAll))
+	mux.HandleFunc("GET /v1/tasks/search", h.authMiddleware(h.handleSearch))
 	mux.HandleFunc("GET /v1/tasks/{id}", h.authMiddleware(h.handleGetByID))
 	mux.HandleFunc("PATCH /v1/tasks/{id}", h.authMiddleware(h.handleUpdate))
 	mux.HandleFunc("DELETE /v1/tasks/{id}", h.authMiddleware(h.handleDelete))
@@ -88,16 +89,25 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task := h.taskService.Create(req)
+	task, err := h.taskService.Create(req)
+	if err != nil {
+		l.Error("failed to create task", zap.Error(err))
+		h.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
 	l.Info("task created", zap.String("task_id", task.ID))
 	h.respondJSON(w, http.StatusCreated, task)
 }
 
 func (h *Handler) handleGetAll(w http.ResponseWriter, r *http.Request) {
 	l := logger.FromContext(r.Context()).With(zap.String("component", "handler"))
-	l.Debug("getting all tasks")
 
-	tasks := h.taskService.GetAll()
+	tasks, err := h.taskService.GetAll()
+	if err != nil {
+		l.Error("failed to get tasks", zap.Error(err))
+		h.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
 	h.respondJSON(w, http.StatusOK, tasks)
 }
 
@@ -150,6 +160,27 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	l.Info("task deleted", zap.String("task_id", id))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
+	l := logger.FromContext(r.Context()).With(zap.String("component", "handler"))
+
+	title := r.URL.Query().Get("title")
+	if title == "" {
+		l.Warn("search: title parameter required")
+		h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "title query parameter is required"})
+		return
+	}
+
+	tasks, err := h.taskService.SearchByTitle(title)
+	if err != nil {
+		l.Error("search failed", zap.Error(err))
+		h.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+
+	l.Info("search completed", zap.String("title", title), zap.Int("results", len(tasks)))
+	h.respondJSON(w, http.StatusOK, tasks)
 }
 
 func (h *Handler) respondJSON(w http.ResponseWriter, status int, data interface{}) {

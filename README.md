@@ -1,205 +1,235 @@
-# Практическое задание 4
+# Практическое задание 5
 ## Шишков А.Д. ЭФМО-02-22
 ## Тема
-Настройка Prometheus + Grafana для метрик. Инструментирование и мониторинг.
+Настройка HTTPS (TLS-терминация). Защита от SQL-инъекций.
 
 ## Цель
-Научиться инструментировать сервис метриками, настраивать сбор через Prometheus и визуализацию в Grafana.
+Обеспечить безопасное соединение (HTTPS) и предотвратить SQL-инъекции, используя параметризованные запросы к базе данных.
 
 ---
 
-## 1. Описание метрик
+## 1. Выбор варианта TLS
 
-В сервис Tasks добавлены 3 метрики через `github.com/prometheus/client_golang`:
+Выбран **вариант 1: TLS на NGINX** (reverse proxy).
 
-### http_requests_total (Counter)
+Почему:
 
-Общее количество HTTP-запросов. Увеличивается на 1 при каждом завершённом запросе.
+- Разделение ответственности: приложение отвечает за бизнес-логику, NGINX — за шифрование.
+- Проще управлять сертификатами: замена cert/key не требует пересборки приложения.
+- NGINX оптимизирован для TLS: поддержка сессий, OCSP stapling, HTTP/2 — из коробки.
+- Стандартная практика в production: приложение работает по HTTP внутри приватной сети, наружу торчит только NGINX по HTTPS.
 
-| Label | Описание | Примеры значений |
-|-------|----------|-----------------|
-| `method` | HTTP-метод | GET, POST, PATCH, DELETE |
-| `route` | Нормализованный маршрут | `/v1/tasks`, `/v1/tasks/:id` |
-| `status` | Код ответа | 200, 201, 401, 404, 503 |
+Схема:
 
-### http_request_duration_seconds (Histogram)
-
-Длительность обработки запроса в секундах. Buckets: 0.01, 0.05, 0.1, 0.3, 1, 3.
-
-| Label | Описание | Примеры значений |
-|-------|----------|-----------------|
-| `method` | HTTP-метод | GET, POST, PATCH, DELETE |
-| `route` | Нормализованный маршрут | `/v1/tasks`, `/v1/tasks/:id` |
-
-### http_in_flight_requests (Gauge)
-
-Количество запросов, обрабатываемых в данный момент. Увеличивается при входе запроса, уменьшается при завершении.
-
-Labels отсутствуют — одно глобальное значение для всего сервиса.
-
-### Нормализация route
-
-Для предотвращения взрыва кардинальности путь нормализуется:
-- `/v1/tasks` → `/v1/tasks`
-- `/v1/tasks/abc123` → `/v1/tasks/:id`
+```
+Клиент --HTTPS:8443--> NGINX --HTTP:8082--> Tasks Service --SQL--> PostgreSQL
+```
 
 ---
 
-## 2. Пример вывода /metrics
-
-Команда:
+## 2. Генерация сертификата
 
 ```bash
-curl -s http://<SERVER_IP>:8082/metrics | head -30
+cd deploy/tls
+mkdir -p certs
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout certs/key.pem \
+  -out certs/cert.pem \
+  -days 365 \
+  -subj "/CN=localhost"
 ```
 
-<!-- Вставить скриншот: вывод /metrics (10-20 строк с http_requests_total, http_request_duration_seconds, http_in_flight_requests) -->
+Результат:
+- `certs/key.pem` — приватный ключ (не коммитится в репозиторий)
+- `certs/cert.pem` — самоподписанный сертификат (для учебных целей)
 
 ---
 
-## 3. Docker Compose и Prometheus
+## 3. Конфигурация NGINX
 
-### docker-compose.yml
+Файл `deploy/tls/nginx.conf`:
 
-Файл `deploy/monitoring/docker-compose.yml` поднимает 3 контейнера:
+```nginx
+events {}
 
-| Сервис | Образ | Порт | Назначение |
-|--------|-------|------|------------|
-| `tasks` | сборка из Dockerfile | 8082 | Микросервис задач с endpoint `/metrics` |
-| `prometheus` | `prom/prometheus:latest` | 9090 | Сбор метрик каждые 5 секунд |
-| `grafana` | `grafana/grafana:latest` | 3000 | Визуализация (admin/admin) |
+http {
+  server {
+    listen 8443 ssl;
+    server_name localhost;
 
-Все контейнеры объединены в сеть `monitoring`. Grafana автоматически провизионирует Prometheus как datasource и подключает готовый dashboard.
+    ssl_certificate     /etc/nginx/tls/cert.pem;
+    ssl_certificate_key /etc/nginx/tls/key.pem;
 
-### prometheus.yml
-
-```yaml
-global:
-  scrape_interval: 5s
-
-scrape_configs:
-  - job_name: "tasks"
-    static_configs:
-      - targets: ["tasks:8082"]
+    location / {
+      proxy_pass http://tasks:8082;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Request-ID $http_x_request_id;
+      proxy_set_header Authorization $http_authorization;
+    }
+  }
+}
 ```
 
-Target — контейнер `tasks` на порту 8082. Prometheus обращается к `http://tasks:8082/metrics` каждые 5 секунд.
+Ключевые моменты:
+- NGINX слушает порт **8443** по HTTPS
+- Проксирует на `tasks:8082` (HTTP внутри Docker-сети)
+- Пробрасывает заголовки `Authorization` и `X-Request-ID` без изменений
 
 ---
 
-## 4. Графики в Grafana
+## 4. Описание БД
 
-Dashboard автоматически провизионируется при запуске. Содержит 3 панели:
+Задачи хранятся в **PostgreSQL 15**. Таблица создаётся автоматически при старте сервиса (автомиграция):
 
-### 4.1. RPS (Requests Per Second)
-
-PromQL:
-
-```promql
-sum(rate(http_requests_total[1m])) by (route)
+```sql
+CREATE TABLE IF NOT EXISTS tasks (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    due_date    TEXT DEFAULT '',
+    done        BOOLEAN DEFAULT FALSE,
+    created_at  TEXT NOT NULL
+);
 ```
 
-Показывает количество запросов в секунду с разбивкой по маршрутам.
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `id` | TEXT | UUID задачи (`t_xxxxxxxx`) |
+| `title` | TEXT | Название (NOT NULL) |
+| `description` | TEXT | Описание |
+| `due_date` | TEXT | Срок выполнения |
+| `done` | BOOLEAN | Статус выполнения |
+| `created_at` | TEXT | Дата создания (RFC 3339) |
 
-<!-- Вставить скриншот: панель RPS в Grafana -->
+Подключение через переменную окружения `DATABASE_URL`:
 
-### 4.2. Error Rate (4xx / 5xx)
-
-PromQL:
-
-```promql
-sum(rate(http_requests_total{status=~"4..|5.."}[1m])) by (status)
 ```
-
-Показывает частоту ошибочных ответов с разбивкой по кодам (401, 404, 503...).
-
-<!-- Вставить скриншот: панель Errors в Grafana -->
-
-### 4.3. Latency p95
-
-PromQL:
-
-```promql
-histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[1m])) by (le, route))
+postgres://tasks:tasks@db:5432/tasks?sslmode=disable
 ```
-
-Показывает 95-й перцентиль задержки — время, в которое укладываются 95% запросов.
-
-<!-- Вставить скриншот: панель Latency p95 в Grafana -->
 
 ---
 
-## 5. Инструкция запуска
+## 5. Демонстрация защиты от SQL-инъекций
 
-### Предварительные требования
+### Уязвимый запрос (так делать НЕЛЬЗЯ)
 
-- Docker и Docker Compose установлены на сервере
-- Auth-сервис запущен на порту 8081 (на хост-машине)
-
-### Запуск Auth-сервиса (на хосте)
-
-```bash
-cd ~/pz4
-export AUTH_PORT=8081
-export AUTH_GRPC_PORT=50051
-go run ./services/auth/cmd/auth &
+```go
+query := "SELECT * FROM tasks WHERE title = '" + userInput + "'"
+db.Query(query)
 ```
 
-### Запуск Tasks + Prometheus + Grafana
+При вводе `' OR '1'='1` запрос превращается в:
 
-```bash
-cd ~/pz4/deploy/monitoring
-docker compose up -d --build
+```sql
+SELECT * FROM tasks WHERE title = '' OR '1'='1'
 ```
 
-### Генерация нагрузки (для появления данных на графиках)
+Это возвращает **все** записи из таблицы — утечка данных.
 
-Успешные запросы:
+### Безопасный запрос (параметризация)
 
-```bash
-for i in $(seq 1 50); do
-  curl -s http://localhost:8082/v1/tasks \
-    -H "Authorization: Bearer demo-token" > /dev/null
-done
+```go
+db.Query("SELECT * FROM tasks WHERE title = $1", userInput)
 ```
 
-Ошибочные запросы (401):
-
-```bash
-for i in $(seq 1 20); do
-  curl -s http://localhost:8082/v1/tasks \
-    -H "Authorization: Bearer wrong" > /dev/null
-done
-```
+Параметр `$1` передаётся отдельно от SQL — драйвер экранирует значение. Инъекция невозможна: строка `' OR '1'='1` ищется как обычный title и ничего не находит.
 
 ### Проверка
 
-| Что | URL |
-|-----|-----|
-| Метрики Tasks | http://localhost:8082/metrics |
-| Prometheus targets | http://localhost:9090/targets |
-| Grafana dashboard | http://localhost:3000 (admin / admin) |
+Создать задачу, затем попытаться инъекцию:
+
+```bash
+# Создать задачу
+curl -k -X POST https://localhost:8443/v1/tasks \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer demo-token" \
+  -d '{"title":"SQL safe","description":"parameterized","due_date":"2026-01-15"}'
+
+# Нормальный поиск — находит задачу
+curl -k "https://localhost:8443/v1/tasks/search?title=SQL%20safe" \
+  -H "Authorization: Bearer demo-token"
+
+# Попытка SQL-инъекции — пустой результат (защита работает)
+curl -k "https://localhost:8443/v1/tasks/search?title=%27%20OR%20%271%27%3D%271" \
+  -H "Authorization: Bearer demo-token"
+```
+
+<!-- Вставить скриншот: результат 3 curl-запросов (создание + нормальный поиск + инъекция) -->
 
 ---
 
-## 6. Контрольные вопросы
+## 6. Инструкция запуска
 
-**1. Зачем приложение отдаёт метрики на отдельном пути?**
+### Шаг 1. Клонировать и подготовить
 
-Endpoint `/metrics` отделён от бизнес-логики, чтобы Prometheus мог собирать метрики без авторизации и не создавая нагрузку на основные хендлеры. Это также позволяет закрыть `/metrics` на уровне сети (firewall), не затрагивая API.
+```bash
+git clone <repo-url> ~/pz5
+cd ~/pz5
+```
 
-**2. Чем Counter отличается от Gauge?**
+### Шаг 2. Сгенерировать сертификат
 
-Counter — монотонно растущий счётчик (только увеличивается). Gauge — значение, которое может расти и падать (например, текущее число активных запросов). Counter подходит для подсчёта событий, Gauge — для текущего состояния.
+```bash
+cd deploy/tls
+bash generate-cert.sh
+```
 
-**3. Почему latency лучше мерить histogram, а не средним?**
+### Шаг 3. Запустить Auth-сервис (на хосте)
 
-Среднее скрывает выбросы: если 99% запросов за 10ms, а 1% за 10s, среднее будет ~110ms — выглядит нормально, но 1% пользователей ждут 10 секунд. Histogram позволяет вычислять перцентили (p95, p99), которые показывают реальную картину.
+```bash
+cd ~/pz5
+go run ./services/auth/cmd/auth &
+```
 
-**4. Что такое labels и почему их не должно быть слишком много?**
+### Шаг 4. Запустить Tasks + PostgreSQL + NGINX
 
-Labels — ключ-значение пары, по которым можно фильтровать и группировать метрики. Каждая уникальная комбинация labels создаёт отдельный time series в Prometheus. Слишком много labels (например, user_id) приводит к взрыву кардинальности — миллионы time series, что перегружает память и хранилище.
+```bash
+cd ~/pz5/deploy/tls
+docker compose up -d --build
+```
 
-**5. Что значат p95/p99 и чем они полезны?**
+### Шаг 5. Проверить
 
-p95 — значение, ниже которого находятся 95% наблюдений. p99 — 99%. Если p95 latency = 200ms, значит 95% запросов обрабатываются быстрее 200ms. Это стандартная метрика для SLA/SLO: «99% запросов должны обрабатываться быстрее 500ms».
+| Что | Команда / URL |
+|-----|---------------|
+| HTTPS через NGINX | `curl -k https://localhost:8443/v1/tasks -H "Authorization: Bearer demo-token"` |
+| Создать задачу | `curl -k -X POST https://localhost:8443/v1/tasks -H "Content-Type: application/json" -H "Authorization: Bearer demo-token" -d '{"title":"Test"}'` |
+| Поиск по title | `curl -k "https://localhost:8443/v1/tasks/search?title=Test" -H "Authorization: Bearer demo-token"` |
+| SQLi (должен вернуть пустой массив) | `curl -k "https://localhost:8443/v1/tasks/search?title=%27%20OR%20%271%27%3D%271" -H "Authorization: Bearer demo-token"` |
+
+### Остановка
+
+```bash
+cd ~/pz5/deploy/tls
+docker compose down
+pkill -f "go run"
+```
+
+---
+
+## 7. Контрольные вопросы
+
+**1. Зачем нужен TLS-сертификат?**
+
+TLS шифрует трафик между клиентом и сервером. Без TLS данные (включая токены и пароли) передаются открытым текстом и могут быть перехвачены (MITM-атака).
+
+**2. Почему самоподписанный сертификат не подходит для продакшена?**
+
+Браузеры и клиенты не доверяют самоподписанным сертификатам — нет проверки через цепочку CA. В продакшене используют сертификаты от Let's Encrypt или коммерческих CA.
+
+**3. В чём преимущество TLS-терминации на NGINX перед TLS в приложении?**
+
+NGINX оптимизирован для TLS (аппаратное ускорение, кэш сессий). Приложение не усложняется. Сертификат можно заменить без пересборки кода. Один NGINX может терминировать TLS для нескольких сервисов.
+
+**4. Что такое SQL-инъекция?**
+
+Атака, при которой злоумышленник внедряет SQL-код через пользовательский ввод. Если приложение подставляет ввод напрямую в SQL-запрос (конкатенация строк), атакующий может читать, изменять или удалять данные.
+
+**5. Почему параметризованные запросы защищают от SQLi?**
+
+Параметр (`$1`) передаётся драйверу отдельно от SQL-команды. Драйвер экранирует спецсимволы — значение всегда интерпретируется как данные, а не как часть SQL-синтаксиса.
+
+**6. Почему нельзя просто фильтровать кавычки в пользовательском вводе?**
+
+Фильтрация ненадёжна: существуют способы обхода (разные кодировки, Unicode, двойное экранирование). Параметризация — единственный надёжный способ, рекомендованный OWASP.

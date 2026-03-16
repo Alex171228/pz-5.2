@@ -13,6 +13,7 @@ import (
 
 	"pz1.2/services/tasks/internal/client/authclient"
 	taskshttp "pz1.2/services/tasks/internal/http"
+	"pz1.2/services/tasks/internal/repository"
 	"pz1.2/services/tasks/internal/service"
 	"pz1.2/shared/logger"
 	"pz1.2/shared/middleware"
@@ -26,6 +27,18 @@ func main() {
 	if port == "" {
 		port = "8082"
 	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://tasks:tasks@localhost:5432/tasks?sslmode=disable"
+	}
+
+	repo, err := repository.NewPostgresRepository(dsn)
+	if err != nil {
+		log.Fatal("failed to connect to database", zap.Error(err))
+	}
+	defer repo.Close()
+	log.Info("connected to database")
 
 	authMode := os.Getenv("AUTH_MODE")
 	if authMode == "" {
@@ -56,7 +69,7 @@ func main() {
 		authVerifier = authclient.NewHTTPClient(authBaseURL, 3*time.Second, log)
 	}
 
-	taskService := service.NewTaskService()
+	taskService := service.NewTaskService(repo)
 
 	mux := http.NewServeMux()
 	handler := taskshttp.NewHandler(taskService, authVerifier, log)

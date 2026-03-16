@@ -1,0 +1,3 @@
+*.exe
+deploy/tls/certs/
+.idea/

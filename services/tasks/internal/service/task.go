@@ -2,7 +2,6 @@ package service
 
 import (
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,21 +33,24 @@ type UpdateTaskRequest struct {
 	Done        *bool   `json:"done,omitempty"`
 }
 
+type TaskRepository interface {
+	Create(task *Task) error
+	GetAll() ([]*Task, error)
+	GetByID(id string) (*Task, error)
+	Update(task *Task) error
+	Delete(id string) error
+	SearchByTitle(title string) ([]*Task, error)
+}
+
 type TaskService struct {
-	mu    sync.RWMutex
-	tasks map[string]*Task
+	repo TaskRepository
 }
 
-func NewTaskService() *TaskService {
-	return &TaskService{
-		tasks: make(map[string]*Task),
-	}
+func NewTaskService(repo TaskRepository) *TaskService {
+	return &TaskService{repo: repo}
 }
 
-func (s *TaskService) Create(req CreateTaskRequest) *Task {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *TaskService) Create(req CreateTaskRequest) (*Task, error) {
 	task := &Task{
 		ID:          "t_" + uuid.New().String()[:8],
 		Title:       req.Title,
@@ -57,40 +59,24 @@ func (s *TaskService) Create(req CreateTaskRequest) *Task {
 		Done:        false,
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
-
-	s.tasks[task.ID] = task
-	return task
-}
-
-func (s *TaskService) GetAll() []*Task {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	tasks := make([]*Task, 0, len(s.tasks))
-	for _, task := range s.tasks {
-		tasks = append(tasks, task)
-	}
-	return tasks
-}
-
-func (s *TaskService) GetByID(id string) (*Task, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	task, ok := s.tasks[id]
-	if !ok {
-		return nil, ErrTaskNotFound
+	if err := s.repo.Create(task); err != nil {
+		return nil, err
 	}
 	return task, nil
 }
 
-func (s *TaskService) Update(id string, req UpdateTaskRequest) (*Task, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *TaskService) GetAll() ([]*Task, error) {
+	return s.repo.GetAll()
+}
 
-	task, ok := s.tasks[id]
-	if !ok {
-		return nil, ErrTaskNotFound
+func (s *TaskService) GetByID(id string) (*Task, error) {
+	return s.repo.GetByID(id)
+}
+
+func (s *TaskService) Update(id string, req UpdateTaskRequest) (*Task, error) {
+	task, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
 	}
 
 	if req.Title != nil {
@@ -106,17 +92,16 @@ func (s *TaskService) Update(id string, req UpdateTaskRequest) (*Task, error) {
 		task.Done = *req.Done
 	}
 
+	if err := s.repo.Update(task); err != nil {
+		return nil, err
+	}
 	return task, nil
 }
 
 func (s *TaskService) Delete(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.repo.Delete(id)
+}
 
-	if _, ok := s.tasks[id]; !ok {
-		return ErrTaskNotFound
-	}
-
-	delete(s.tasks, id)
-	return nil
+func (s *TaskService) SearchByTitle(title string) ([]*Task, error) {
+	return s.repo.SearchByTitle(title)
 }
