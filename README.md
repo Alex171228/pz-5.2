@@ -219,15 +219,7 @@ curl.exe -k "https://<SERVER_IP>:8443/v1/tasks/search?title=SQL%20safe" -H "Auth
 curl.exe -k "https://<SERVER_IP>:8443/v1/tasks/search?title=%27%20OR%20%271%27%3D%271" -H "Authorization: Bearer demo-token"
 ```
 
-### Остановка (на сервере)
-
-```bash
-cd ~/pz5/deploy/tls
-docker compose down
-pkill -f "go run"
-```
-
----
+Для проверки можно использовать постман коллекцию https://github.com/Alex171228/pz-5.2/blob/main/pz5_postman_collection.json , замените host на ip своего сервера. 
 
 ## 7. Контрольные вопросы
 
