@@ -135,9 +135,9 @@ db.Query("SELECT * FROM tasks WHERE title = $1", userInput)
 
 Параметр `$1` передаётся отдельно от SQL — драйвер экранирует значение. Инъекция невозможна: строка `' OR '1'='1` ищется как обычный title и ничего не находит.
 
-### Проверка (с ноутбука, IP сервера <SERVER_IP>)
+### Проверка (с компьютера, IP сервера <SERVER_IP>)
 
-Создать задачу, затем попытаться инъекцию:
+Создать задачу, затем попытаться выполнить инъекцию:
 
 ```bash
 # Создать задачу
@@ -150,13 +150,23 @@ curl.exe -k "https://<SERVER_IP>:8443/v1/tasks/search?title=SQL%20safe" -H "Auth
 curl.exe -k "https://<SERVER_IP>:8443/v1/tasks/search?title=%27%20OR%20%271%27%3D%271" -H "Authorization: Bearer demo-token"
 ```
 
-<!-- Вставить скриншот: результат 3 curl-запросов (создание + нормальный поиск + инъекция) -->
+**1. Создание задачи через HTTPS (201 Created):**
+
+![POST create task](docs/images/pz5_create.png)
+
+**2. Нормальный поиск — находит задачу:**
+
+![Search SQL safe](docs/images/pz5_search.png)
+
+**3. SQL-инъекция — пустой массив (защита работает):**
+
+![SQL injection blocked](docs/images/pz5_sqli.png)
 
 ---
 
 ## 6. Инструкция запуска
 
-Сервер — Ubuntu, тестирование — с ноутбука. Замените `<SERVER_IP>` на IP вашего сервера.
+Сервер — Ubuntu, тестирование — с компьютера. Замените `<SERVER_IP>` на IP вашего сервера.
 
 ### На сервере
 
@@ -188,7 +198,7 @@ docker compose up -d --build
 sudo ufw allow 8443/tcp
 ```
 
-### С ноутбука (проверка)
+### С компьютера (проверка)
 
 Создать задачу:
 
