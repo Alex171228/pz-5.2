@@ -17,7 +17,6 @@
 - Разделение ответственности: приложение отвечает за бизнес-логику, NGINX — за шифрование.
 - Проще управлять сертификатами: замена cert/key не требует пересборки приложения.
 - NGINX оптимизирован для TLS: поддержка сессий, OCSP stapling, HTTP/2 — из коробки.
-- Стандартная практика в production: приложение работает по HTTP внутри приватной сети, наружу торчит только NGINX по HTTPS.
 
 Схема:
 
@@ -40,8 +39,8 @@ openssl req -x509 -newkey rsa:2048 -nodes \
 ```
 
 Результат:
-- `certs/key.pem` — приватный ключ (не коммитится в репозиторий)
-- `certs/cert.pem` — самоподписанный сертификат (для учебных целей)
+- `certs/key.pem` — приватный ключ 
+- `certs/cert.pem` — самоподписанный сертификат 
 
 ---
 
@@ -80,7 +79,7 @@ http {
 
 ## 4. Описание БД
 
-Задачи хранятся в **PostgreSQL 15**. Таблица создаётся автоматически при старте сервиса (автомиграция):
+Задачи хранятся в **PostgreSQL 15**. Таблица создаётся автоматически при старте сервиса:
 
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
@@ -112,7 +111,7 @@ postgres://tasks:tasks@db:5432/tasks?sslmode=disable
 
 ## 5. Демонстрация защиты от SQL-инъекций
 
-### Уязвимый запрос (так делать НЕЛЬЗЯ)
+### Уязвимый запрос 
 
 ```go
 query := "SELECT * FROM tasks WHERE title = '" + userInput + "'"
@@ -180,21 +179,17 @@ go mod download
 cd deploy/tls
 bash generate-cert.sh
 
-# 3. Убить старые процессы
-pkill -f "go run" 2>/dev/null
-fuser -k 8081/tcp 8082/tcp 8443/tcp 50051/tcp 2>/dev/null
-sleep 1
 
-# 4. Запустить Auth (на хосте)
+# 3. Запустить Auth (на хосте)
 cd ~/pz5
 go run ./services/auth/cmd/auth 2>&1 &
 sleep 2
 
-# 5. Запустить Tasks + PostgreSQL + NGINX
+# 4. Запустить Tasks + PostgreSQL + NGINX
 cd ~/pz5/deploy/tls
 docker compose up -d --build
 
-# 6. Открыть порт HTTPS
+# 5. Открыть порт HTTPS
 sudo ufw allow 8443/tcp
 ```
 
