@@ -151,15 +151,18 @@ curl.exe -k "https://<SERVER_IP>:8443/v1/tasks/search?title=%27%20OR%20%271%27%3
 
 **1. Создание задачи через HTTPS (201 Created):**
 
-![POST create task](docs/images/pz5_create.png)
+![pz5_create](https://github.com/user-attachments/assets/c335f22b-6bb1-4b4e-aa0e-f7588612b672)
+
 
 **2. Нормальный поиск — находит задачу:**
 
-![Search SQL safe](docs/images/pz5_search.png)
+![pz5_search](https://github.com/user-attachments/assets/6ad15059-92e2-4bde-8776-e3659e4f9a3f)
+
 
 **3. SQL-инъекция — пустой массив (защита работает):**
 
-![SQL injection blocked](docs/images/pz5_sqli.png)
+![pz5_sqli](https://github.com/user-attachments/assets/245ddbda-af74-4c97-918e-7ac5666950c7)
+
 
 ---
 
